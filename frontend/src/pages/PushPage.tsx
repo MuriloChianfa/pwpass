@@ -77,6 +77,8 @@ export function PushPage() {
   const [passphrase, setPassphrase] = useState('')
   const [allowDeletion, setAllowDeletion] = useState(false)
   const [resultToken, setResultToken] = useState<string | null>(null)
+  const [pushing, setPushing] = useState(false)
+  const [pushError, setPushError] = useState<string | null>(null)
   const [sidebarMax, setSidebarMax] = useState<number | undefined>(undefined)
   const formRef = useRef<HTMLDivElement>(null)
 
@@ -89,16 +91,24 @@ export function PushPage() {
     return () => observer.disconnect()
   }, [])
 
-  const handlePush = () => {
-    if (!content.trim()) return
-    const token = pushSecret({
-      content,
-      passphrase: passphrase || undefined,
-      expireDays: days,
-      maxViews: views,
-      allowDeletion,
-    })
-    setResultToken(token)
+  const handlePush = async () => {
+    if (!content.trim() || pushing) return
+    setPushing(true)
+    setPushError(null)
+    try {
+      const token = await pushSecret({
+        content,
+        passphrase: passphrase || undefined,
+        expireDays: days,
+        maxViews: views,
+        allowDeletion,
+      })
+      setResultToken(token)
+    } catch (err) {
+      setPushError(err instanceof Error ? err.message : 'Failed to share password. Please try again.')
+    } finally {
+      setPushing(false)
+    }
   }
 
   if (resultToken) {
@@ -127,8 +137,11 @@ export function PushPage() {
             passphrase={passphrase}
             onPassphraseChange={setPassphrase}
           />
-          <PushButton onClick={handlePush} disabled={!content.trim()}>
-            Share Securely!
+          {pushError && (
+            <div style={{ color: '#ef4444', fontSize: '0.875rem' }}>{pushError}</div>
+          )}
+          <PushButton onClick={handlePush} disabled={!content.trim() || pushing}>
+            {pushing ? 'Sharing...' : 'Share Securely!'}
           </PushButton>
         </FormColumn>
 

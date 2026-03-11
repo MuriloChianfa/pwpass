@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import styled from '@emotion/styled'
 import { theme } from '../theme'
-import { getSecret, deleteSecret, hasPassphrase } from '../services/api'
+import { getSecret, deleteSecret, getSecretMeta } from '../services/api'
 import type { SecretResult } from '../services/api'
 
 const Page = styled.div`
@@ -178,24 +178,48 @@ export function ViewPage() {
   const [copied, setCopied] = useState(false)
   const [deleted, setDeleted] = useState(false)
   const [visible, setVisible] = useState(false)
+  const [loading, setLoading] = useState(true)
 
-  if (needsPassphrase === null && !secret && !error && token) {
-    const needs = hasPassphrase(token)
-    if (needs) {
-      setNeedsPassphrase(true)
-    } else {
-      const result = getSecret(token)
-      if (result.ok) {
-        setSecret(result.data)
-      } else {
-        setError(result.error)
-      }
-    }
-  }
-
-  const handleUnlock = () => {
+  useEffect(() => {
     if (!token) return
-    const result = getSecret(token, passphrase)
+    let cancelled = false
+
+    ;(async () => {
+      const meta = await getSecretMeta(token)
+      if (cancelled) return
+
+      if (meta.status === 'not_found') {
+        setError('This password has expired or does not exist.')
+        setLoading(false)
+        return
+      }
+      if (meta.status === 'error') {
+        setError('Unable to reach the server. Please try again later.')
+        setLoading(false)
+        return
+      }
+
+      if (meta.hasPassphrase) {
+        setNeedsPassphrase(true)
+        setLoading(false)
+      } else {
+        const result = await getSecret(token)
+        if (cancelled) return
+        if (result.ok) {
+          setSecret(result.data)
+        } else {
+          setError(result.error)
+        }
+        setLoading(false)
+      }
+    })()
+
+    return () => { cancelled = true }
+  }, [token])
+
+  const handleUnlock = async () => {
+    if (!token) return
+    const result = await getSecret(token, passphrase)
     if (result.ok) {
       setSecret(result.data)
       setNeedsPassphrase(false)
@@ -211,10 +235,14 @@ export function ViewPage() {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!token) return
-    deleteSecret(token)
-    setDeleted(true)
+    const ok = await deleteSecret(token)
+    if (ok) {
+      setDeleted(true)
+    } else {
+      setError('Failed to delete password. It may have already been removed.')
+    }
   }
 
   if (deleted) {
@@ -259,6 +287,16 @@ export function ViewPage() {
           <ButtonRow>
             <Button onClick={handleUnlock}>Unlock</Button>
           </ButtonRow>
+        </Card>
+      </Page>
+    )
+  }
+
+  if (loading) {
+    return (
+      <Page>
+        <Card>
+          <Description>Loading...</Description>
         </Card>
       </Page>
     )

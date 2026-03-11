@@ -1,15 +1,6 @@
-import { nanoid } from 'nanoid'
-
-const STORAGE_PREFIX = 'pwpass:'
-
-export interface StoredSecret {
-  content: string
-  passphrase?: string
-  expiresAt: number
-  maxViews: number
-  currentViews: number
-  allowDeletion: boolean
-  createdAt: number
+const API_URL = import.meta.env.VITE_API_URL as string
+if (!API_URL) {
+  throw new Error('VITE_API_URL environment variable is not set')
 }
 
 export interface PushSecretParams {
@@ -27,84 +18,84 @@ export interface SecretResult {
   allowDeletion: boolean
 }
 
-function getStorageKey(token: string): string {
-  return `${STORAGE_PREFIX}${token}`
+async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...init?.headers },
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: 'Request failed' }))
+    throw new Error(body.error ?? `HTTP ${res.status}`)
+  }
+  if (res.status === 204) return undefined as T
+  return res.json()
 }
 
-export function pushSecret(params: PushSecretParams): string {
-  const token = nanoid(21)
-  const secret: StoredSecret = {
-    content: params.content,
-    passphrase: params.passphrase || undefined,
-    expiresAt: Date.now() + params.expireDays * 24 * 60 * 60 * 1000,
-    maxViews: params.maxViews,
-    currentViews: 0,
-    allowDeletion: params.allowDeletion,
-    createdAt: Date.now(),
-  }
-
-  localStorage.setItem(getStorageKey(token), JSON.stringify(secret))
+export async function pushSecret(params: PushSecretParams): Promise<string> {
+  const { token } = await api<{ token: string }>('/secrets', {
+    method: 'POST',
+    body: JSON.stringify({
+      content: params.content,
+      passphrase: params.passphrase || undefined,
+      expire_days: params.expireDays,
+      max_views: params.maxViews,
+      allow_deletion: params.allowDeletion,
+    }),
+  })
   return token
 }
 
-export function getSecret(
+export async function getSecret(
   token: string,
   passphrase?: string,
-): { ok: true; data: SecretResult } | { ok: false; error: string } {
-  const raw = localStorage.getItem(getStorageKey(token))
-
-  if (!raw) {
-    return { ok: false, error: 'This password has expired or does not exist.' }
-  }
-
-  const secret: StoredSecret = JSON.parse(raw)
-
-  if (Date.now() > secret.expiresAt) {
-    localStorage.removeItem(getStorageKey(token))
-    return { ok: false, error: 'This password has expired.' }
-  }
-
-  if (secret.currentViews >= secret.maxViews) {
-    localStorage.removeItem(getStorageKey(token))
-    return { ok: false, error: 'This password has reached its maximum view count.' }
-  }
-
-  if (secret.passphrase && secret.passphrase !== passphrase) {
-    return { ok: false, error: 'Invalid passphrase.' }
-  }
-
-  secret.currentViews += 1
-  const isLastView = secret.currentViews >= secret.maxViews
-
-  if (isLastView) {
-    localStorage.removeItem(getStorageKey(token))
-  } else {
-    localStorage.setItem(getStorageKey(token), JSON.stringify(secret))
-  }
-
-  return {
-    ok: true,
-    data: {
-      content: secret.content,
-      remainingViews: secret.maxViews - secret.currentViews,
-      expiresAt: secret.expiresAt,
-      allowDeletion: secret.allowDeletion,
-    },
+): Promise<{ ok: true; data: SecretResult } | { ok: false; error: string }> {
+  try {
+    const res = await api<{
+      content: string
+      remaining_views: number
+      expires_at: number
+      allow_deletion: boolean
+    }>(`/secrets/${token}/view`, {
+      method: 'POST',
+      body: JSON.stringify({ passphrase }),
+    })
+    return {
+      ok: true,
+      data: {
+        content: res.content,
+        remainingViews: res.remaining_views,
+        expiresAt: res.expires_at * 1000,
+        allowDeletion: res.allow_deletion,
+      },
+    }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
   }
 }
 
-export function deleteSecret(token: string): boolean {
-  const key = getStorageKey(token)
-  if (localStorage.getItem(key)) {
-    localStorage.removeItem(key)
+export async function deleteSecret(token: string): Promise<boolean> {
+  try {
+    await api(`/secrets/${token}`, { method: 'DELETE' })
     return true
+  } catch {
+    return false
   }
-  return false
 }
 
-export function hasPassphrase(token: string): boolean {
-  const raw = localStorage.getItem(getStorageKey(token))
-  if (!raw) return false
-  const secret: StoredSecret = JSON.parse(raw)
-  return !!secret.passphrase
+export type MetaResult =
+  | { status: 'found'; hasPassphrase: boolean }
+  | { status: 'not_found' }
+  | { status: 'error'; message: string }
+
+export async function getSecretMeta(token: string): Promise<MetaResult> {
+  try {
+    const res = await api<{ has_passphrase: boolean }>(`/secrets/${token}/meta`)
+    return { status: 'found', hasPassphrase: res.has_passphrase }
+  } catch (err) {
+    const msg = (err as Error).message
+    if (msg.includes('not found')) {
+      return { status: 'not_found' }
+    }
+    return { status: 'error', message: msg }
+  }
 }
