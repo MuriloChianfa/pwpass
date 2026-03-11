@@ -1,4 +1,4 @@
-name: Deploy to GitHub Pages
+name: Deploy
 
 on:
   push:
@@ -11,15 +11,52 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  group: deploy
   cancel-in-progress: true
 
 jobs:
-  build:
+  backend:
+    name: Build & deploy backend
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
+    outputs:
+      api_url: ${{ steps.tf-output.outputs.api_url }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Build Lambda binaries
+        run: make build
+        working-directory: backend
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform init
+        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+        working-directory: infra
+
+      - name: Terraform apply
+        run: terraform apply -auto-approve
+        working-directory: infra
+
+      - name: Export API URL
+        id: tf-output
+        run: echo "api_url=$(terraform output -raw api_url)" >> "$GITHUB_OUTPUT"
+        working-directory: infra
+
+  frontend:
+    name: Build frontend
+    needs: backend
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -30,14 +67,21 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - run: npm ci
-      - run: npm run build
+        working-directory: frontend
+
+      - name: Build with API URL
+        run: npm run build
+        working-directory: frontend
+        env:
+          VITE_API_URL: ${{ needs.backend.outputs.api_url }}
 
       - uses: actions/upload-pages-artifact@v3
         with:
           path: frontend/dist
 
-  deploy:
-    needs: build
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    needs: frontend
     runs-on: ubuntu-latest
     environment:
       name: github-pages

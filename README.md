@@ -1,18 +1,28 @@
-# pwpass
+# PWPass
 
-Generate passwords and share them securely.
+Generate secure passwords and share them securely.
 
-# backend
+## Architecture
 
 ```mermaid
 flowchart TD
-    U[User Browser] --> FE[React SPA on GitHub Pages]
-    FE -->|POST /secrets| APIGW[API Gateway REST API]
-    FE -->|GET /secrets/:token| APIGW
+    U[User Browser] --> FE["React SPA"]
+    FE -->|"POST /secrets"| APIGW[API Gateway HTTP API v2]
+    FE -->|"GET /secrets/{token}/meta"| APIGW
+    FE -->|"POST /secrets/{token}/view"| APIGW
+    FE -->|"DELETE /secrets/{token}"| APIGW
 
     APIGW --> API[Lambda API - Go]
-    API --> DDB[(DynamoDB secrets table)]
+    API -->|encrypt/decrypt| KMS[KMS Key]
+    API -->|read/write| DDB[("DynamoDB")]
 
-    SCH[EventBridge Scheduler] --> CLEAN[Lambda cleanup - Go]
-    CLEAN --> DDB
+    EB["EventBridge Rule<br>(every 1 hour)"] --> CLEAN[Lambda cleanup - Go]
+    CLEAN -->|scan + delete expired| DDB
 ```
+
+## Deploying
+
+### Prerequisites
+
+- AWS account with an S3 bucket for Terraform state
+- Required secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `TF_STATE_BUCKET`
