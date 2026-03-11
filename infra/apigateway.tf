@@ -44,6 +44,11 @@ resource "aws_apigatewayv2_stage" "default" {
       latency        = "$context.integrationLatency"
     })
   }
+
+  depends_on = [
+    aws_apigatewayv2_route.push,
+    aws_apigatewayv2_route.view,
+  ]
 }
 
 resource "aws_cloudwatch_log_group" "apigw" {
